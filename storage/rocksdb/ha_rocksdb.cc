@@ -450,6 +450,10 @@ static void rocksdb_set_max_latest_deadlocks(THD *thd,
                                              struct st_mysql_sys_var *var,
                                              void *var_ptr, const void *save);
 
+static void rocksdb_set_num_bottom_pri_threads(THD *thd,
+                                               struct st_mysql_sys_var *var,
+                                               void *var_ptr, const void *save);
+
 static void rdb_set_collation_exception_list(const char *exception_list);
 static void rocksdb_set_collation_exception_list(THD *thd,
                                                  struct st_mysql_sys_var *var,
@@ -500,6 +504,7 @@ static unsigned long long  // NOLINT(runtime/int)
     rocksdb_sst_mgr_rate_bytes_per_sec;
 static unsigned long long rocksdb_delayed_write_rate;
 static uint32_t rocksdb_max_latest_deadlocks;
+static int32_t rocksdb_num_bottom_pri_threads;
 static unsigned long  // NOLINT(runtime/int)
     rocksdb_persistent_cache_size_mb;
 static uint64_t rocksdb_info_log_level;
@@ -909,6 +914,13 @@ static MYSQL_SYSVAR_UINT(max_latest_deadlocks, rocksdb_max_latest_deadlocks,
                          "deadlocks to store",
                          nullptr, rocksdb_set_max_latest_deadlocks,
                          rocksdb::kInitialMaxDeadlocks, 0, UINT32_MAX, 0);
+
+static MYSQL_SYSVAR_INT(num_bottom_pri_threads, rocksdb_num_bottom_pri_threads,
+                        PLUGIN_VAR_RQCMDARG,
+                        "Number of threads to run bottom-level compactions in "
+                        "a dedicated thread pool with lowered CPU priority",
+                        nullptr, rocksdb_set_num_bottom_pri_threads, 0, 0,
+                        INT32_MAX, 0);
 
 static MYSQL_SYSVAR_ENUM(
     info_log_level, rocksdb_info_log_level, PLUGIN_VAR_RQCMDARG,
@@ -1645,6 +1657,7 @@ static struct st_mysql_sys_var *rocksdb_system_variables[] = {
     MYSQL_SYSVAR(sst_mgr_rate_bytes_per_sec),
     MYSQL_SYSVAR(delayed_write_rate),
     MYSQL_SYSVAR(max_latest_deadlocks),
+    MYSQL_SYSVAR(num_bottom_pri_threads),
     MYSQL_SYSVAR(info_log_level),
     MYSQL_SYSVAR(max_open_files),
     MYSQL_SYSVAR(max_total_wal_size),
@@ -12925,6 +12938,19 @@ void rocksdb_set_max_latest_deadlocks(THD *thd, struct st_mysql_sys_var *var,
   if (rocksdb_max_latest_deadlocks != new_val) {
     rocksdb_max_latest_deadlocks = new_val;
     rdb->SetDeadlockInfoBufferSize(rocksdb_max_latest_deadlocks);
+  }
+  RDB_MUTEX_UNLOCK_CHECK(rdb_sysvars_mutex);
+}
+
+void rocksdb_set_num_bottom_pri_threads(THD *thd, struct st_mysql_sys_var *var,
+                                        void *var_ptr, const void *save) {
+  RDB_MUTEX_LOCK_CHECK(rdb_sysvars_mutex);
+  const int32_t new_val = *static_cast<const int32_t *>(save);
+  if (rocksdb_num_bottom_pri_threads != new_val) {
+    rocksdb_num_bottom_pri_threads = new_val;
+    rdb->GetEnv()->SetBackgroundThreads(new_val,
+                                        rocksdb::Env::Priority::BOTTOM);
+    rdb->GetEnv()->LowerThreadPoolCPUPriority(rocksdb::Env::Priority::BOTTOM);
   }
   RDB_MUTEX_UNLOCK_CHECK(rdb_sysvars_mutex);
 }
